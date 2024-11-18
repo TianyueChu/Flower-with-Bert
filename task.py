@@ -1,7 +1,7 @@
 """quickstart-compose: A Flower / PyTorch app."""
 import logging
 # Set logging level to DEBUG
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 import pandas as pd
 import torch
 import os
@@ -9,7 +9,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments, \
     DataCollatorWithPadding, DistilBertForSequenceClassification, DistilBertTokenizer
+from collections import OrderedDict
+import fcntl
+import ast
 
+from collections import deque
 from typing import List, Tuple, OrderedDict
 
 from datasets.utils.logging import disable_progress_bar
@@ -51,6 +55,7 @@ Setting `min_available_clients` lower than `min_fit_clients` or
 connected to the server. `min_available_clients` must be set to a value larger
 than or equal to the values of `min_fit_clients` and `min_evaluate_clients`.
 """
+
 
 class FedCustom(Strategy):
     """ Customized Federated Averaging strategy with server-side evaluation
@@ -331,10 +336,11 @@ class IntrusionDataset(torch.utils.data.Dataset):
         return len(self.labels)
 
 def load_data(client_id):
-    client_df = pd.read_csv(f'/app/data/client_dataset_{client_id}.csv')
+    # client_df = pd.read_csv(f'/app/data/client_dataset_{client_id}.csv')
+    client_df = pd.read_csv(f'./data/client_dataset_{client_id}.csv')
     X = client_df['log_line']
     y = client_df['label']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4, random_state=1)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.01, random_state=42)
 
     # Initialize the tokenizer once and use it for all tokenization
     tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
@@ -418,12 +424,96 @@ def test(model, test_dataset, tokenizer):
     return eval_results
 
 
+def get_unique_proportion_from_file(proportions_file_path):
+    """Retrieve and remove the first label proportion from the file for a unique assignment."""
+    with open(proportions_file_path, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)  # Lock the file for safe read-modify-write
+
+        # Read and parse the current label proportions from the file
+        proportions_str = f.read().strip()
+        current_proportions = ast.literal_eval(proportions_str)
+
+        # Get the first proportion and update the list
+        if current_proportions:
+            current_proportion = current_proportions.pop(0)  # Retrieve and remove the first element
+        else:
+            raise ValueError("No more label proportions available")
+
+        # Rewind the file, write the updated list, and truncate the file
+        f.seek(0)
+        f.write(str(current_proportions))
+        f.truncate()
+
+        fcntl.flock(f, fcntl.LOCK_UN)  # Release the file lock
+
+    return current_proportion
+
+
+def load_or_partition_client_data(client_id, label_proportions_file_path,label_column='label', label_0_total=86937, label_1_total=1635):
+    """
+    Loads the client data from an existing CSV file if available; otherwise, partitions the data for the client.
+
+    Args:
+    - client_id (int): Unique identifier for the client.
+    - label_proportions_file_path (str): Path to the file containing label proportions.
+    - label_column (str): Name of the label column in the data.
+    - label_0_total (int): Total count of label 0 in the data.
+    - label_1_total (int): Total count of label 1 in the data.
+
+    Returns:
+    - DataFrame: Partitioned client data.
+    """
+
+    # Define paths
+    dataset_path = './data/client_dataset.csv'
+    client_file_path = f'./data/client_dataset_{client_id}.csv'
+
+    # Check if the client's CSV file already exists
+    if os.path.exists(client_file_path):
+        # If file exists, load and return data
+        logging.debug(f"Loading existing data for client ID: {client_id}")
+        client_data = pd.read_csv(client_file_path)
+        return client_data
+
+    # If file does not exist, proceed with partitioning
+    logging.debug(f"Client data for ID {client_id} does not exist. Partitioning data.")
+
+    # Get a unique label proportion for this client from the file or list
+    current_proportion = get_unique_proportion_from_file(label_proportions_file_path)  # You can define this function as needed
+    print(f"Assigning label proportion {current_proportion} to client ID {client_id}")
+
+    # Load the main dataset
+    df = pd.read_csv(dataset_path)
+
+    # Separate data by labels
+    label_0_data = df[df[label_column] == 0]
+    label_1_data = df[df[label_column] == 1]
+
+    # Calculate sample sizes based on the fixed total counts and current proportions
+    label_0_size = min(int(label_0_total * current_proportion[0]), len(label_0_data))
+    label_1_size = min(int(label_1_total * current_proportion[1]), len(label_1_data))
+
+    # Sample from each label
+    part_label_0 = label_0_data.sample(n=label_0_size, replace=False, random_state=42)
+    part_label_1 = label_1_data.sample(n=label_1_size, replace=False, random_state=42)
+
+    # Concatenate and shuffle the part
+    client_data = pd.concat([part_label_0, part_label_1]).sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # Save partitioned data to CSV for future reuse
+    client_data.to_csv(client_file_path, index=False)
+
+    df.drop(part_label_0.index, inplace=True)
+    df.drop(part_label_1.index, inplace=True)
+
+    df.to_csv(dataset_path, index=False)
+    return client_data
+
 def partition(client_id, partition_size):
-    print(f"Running partition for client_id={client_id} with partition_size={partition_size}")
+    print(f"Running partition for client_id={client_id}")
 
     # Ensure the directory exists (though likely redundant with volume mounts)
     # print("Ensuring data directory exists at /app/data")
-    print("Ensuring data directory exists at ./app/data")
 
     # Define paths
     dataset_path = './data/client_dataset.csv'
@@ -487,13 +577,11 @@ def load_server_data(csv_path: str):
         raise
 
 
-
 def load_parameters_to_bert(parameters_aggregated):
     """Loads aggregated parameters into BERT model."""
     print("Loading parameters into BERT model")
     # Initialize BERT model
     model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased")
-
     ndarrays = parameters_to_ndarrays(parameters_aggregated)
 
     # Iterate over model layers and assign parameters
@@ -503,10 +591,9 @@ def load_parameters_to_bert(parameters_aggregated):
         print(f"Loaded parameter for layer: {name}")
 
     # Load updated parameters into BERT model
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict,strict=True)
     print("Parameters loaded successfully into BERT model.")
     return model
-
 
 def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
     # Multiply accuracy of each client by number of examples used

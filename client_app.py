@@ -2,25 +2,39 @@
 import logging
 logging.basicConfig(level=logging.INFO)
 import time
+import hashlib
 import torch
 from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments, \
     DataCollatorWithPadding, DistilBertForSequenceClassification, DistilBertTokenizer
-
 from collections import OrderedDict
+from pathlib import Path
 
-import flwr as fl
+import flwr
 from flwr.client import Client, ClientApp, NumPyClient
 
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
-from task import load_data, test, train, partition
+from task import load_data, test, train, partition,load_or_partition_client_data
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 logging.debug(f"Using device: {DEVICE}")
 
-client_id_global = int(str(time.time())[6:].replace('.', ''))
+current_time = str(time.time()).encode()  # Get the current timestamp as a string
+client_id_global = hashlib.md5(current_time).hexdigest()
 
-class BertClient(fl.client.NumPyClient):
+# Path to the shared label proportions file in ./configs directory
+proportions_file_path = Path("./configs/label_proportions.txt")
+
+# Ensure the ./configs directory exists
+proportions_file_path.parent.mkdir(parents=True, exist_ok=True)
+
+# Initialize label proportions in the file if it doesn’t exist
+initial_proportions = [(0.2, 0.2), (0.2, 0.2), (0.2, 0.2), (0.2, 0.2), (0.2, 0.2)]
+if not proportions_file_path.exists():
+    with open(proportions_file_path, 'w') as f:
+        f.write(str(initial_proportions))
+
+class BertClient(flwr.client.NumPyClient):
     def __init__(self, net, trainset, testset, num_examples, tokenizer):
         logging.debug("BertClient initialized with model, trainset, testset, and tokenizer")
         self.net = net
@@ -77,15 +91,14 @@ def client_fn(context: Context) -> Client:
     net = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=2)
     logging.debug("Model loaded successfully")
 
-    # Get client ID from context
     client_id = context.node_id
     if client_id == -1:
         client_id = client_id_global
-    logging.debug(f"Client ID: {client_id}")
+    print(f"Client ID: {client_id}")
 
     # Partition data for this client
     logging.debug(f"Partitioning data for client ID: {client_id}")
-    partition(client_id, 100)
+    load_or_partition_client_data(client_id, proportions_file_path)
     logging.debug("Data partitioned successfully")
 
     # Load data
@@ -103,5 +116,5 @@ logging.debug("Starting ClientApp")
 app = ClientApp(client_fn=client_fn)
 logging.debug("ClientApp created successfully")
 
-# fl.client.start_client(server_address="81.41.186.137:8081", client_fn=client_fn, grpc_max_message_length=1_073_741_824)
 
+flwr.client.start_client(server_address="127.0.0.1:8080", client_fn=client_fn, grpc_max_message_length=1_073_741_824)
