@@ -7,27 +7,19 @@ import torch
 import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments, \
+from transformers import Trainer, TrainingArguments, \
     DataCollatorWithPadding, DistilBertForSequenceClassification, DistilBertTokenizer
-from collections import OrderedDict
+
 import fcntl
 import ast
-
-from collections import deque
-from typing import List, Tuple, OrderedDict
-
-from datasets.utils.logging import disable_progress_bar
+import datasets
+from typing import List, Tuple
 from torch.utils.data import DataLoader
+from flwr.common import Metrics
 
-import flwr as fl
-from flwr.client import Client, ClientApp, NumPyClient
-from flwr.common import Metrics, Context
-from flwr.server import ServerApp, ServerConfig, ServerAppComponents
-from flwr.simulation import run_simulation
 
 from logging import WARNING
 from typing import Callable, Optional, Union
-
 from flwr.common import (
     EvaluateIns,
     EvaluateRes,
@@ -308,7 +300,7 @@ class FedCustom(Strategy):
 
         return loss_aggregated, metrics_aggregated
 
-    def evaluate_global_model(self, server_round: int) -> Optional[tuple[float, dict[str, Scalar]]]:
+    def evaluate_global_model(self, server_round: int) -> float:
         """Evaluate BERT model with aggregated parameters."""
 
         # Load the aggregated parameters
@@ -317,8 +309,8 @@ class FedCustom(Strategy):
             model = load_parameters_to_bert(self.latest_aggregated_parameters)
 
         tokenizer =  DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-        print("Evaluating model in Server...")
-        eval_results = test(model, self.server_eval_data, tokenizer)
+        print(f"Evaluating model in Server Round {server_round}...")
+        eval_results = test(model, self.server_eval_data)
 
         return float(eval_results['eval_loss'])
 
@@ -355,7 +347,7 @@ def load_data(client_id):
     return trainset, testset, num_examples, tokenizer
 
 
-def train(model, train_dataset, tokenizer, epochs=1):
+def train(model, train_dataset, epochs=1):
     # Define training arguments
     training_args = TrainingArguments(
         output_dir=f'./results/',
@@ -367,6 +359,7 @@ def train(model, train_dataset, tokenizer, epochs=1):
         use_cpu=not torch.cuda.is_available(),
     )
     # Use a DataCollator to handle padding and ensure batches are of uniform length
+    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
 
     # Initialize the Trainer
@@ -395,13 +388,14 @@ def compute_metrics(eval_pred):
     }
 
 
-def test(model, test_dataset, tokenizer):
+def test(model, test_dataset):
     eval_args = TrainingArguments(
         output_dir=f'./results/',
         per_device_eval_batch_size=32,
         do_eval=True,  # Explicitly set to indicate this is evaluation-only
         use_cpu=not torch.cuda.is_available()  # Ensures device compatibility
     )
+    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
 
     # Initialize Trainer for evaluation only
@@ -552,7 +546,6 @@ def partition(client_id, partition_size):
         except Exception as e:
             print(f"Failed to save the remaining dataset. Error: {e}")
 
-
 def load_server_data(csv_path: str):
     """Load server-side evaluation data from a CSV file."""
     print(f"Loading server-side data from: {csv_path}")
@@ -603,3 +596,36 @@ def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
 
     # Aggregate and return custom metric (weighted average)
     return {"accuracy": sum(accuracies) / sum(examples)}
+
+
+def dataset_loader(client_id):
+    # Load data
+    data = pd.read_csv(f"./data/client_dataset_{client_id}.csv")
+
+    features = data['log_line'].values.tolist()
+    labels = data['label'].values.tolist()
+
+    ds_dict = {'feature': features, 'label': labels}
+    ds = datasets.Dataset.from_dict(ds_dict)
+    tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+
+    def tokenization(example):
+        return tokenizer(
+            example['feature'], padding=True,
+            truncation=True, max_length=100,
+        )
+
+    ds = ds.map(tokenization, batched=True)
+    ds = ds.remove_columns(['feature'])
+    ds = ds.train_test_split(test_size=0.01, seed=42)
+    train_ds = ds['train']
+    train_ds.save_to_disk(f"./data/train_data/client_dataset_{client_id}")
+    test_ds = ds['test']
+    test_ds.save_to_disk(f"./data/test_data/client_dataset_{client_id}")
+
+    num_examples = {
+        "trainset": len(train_ds),
+        "testset": len(test_ds)
+    }
+    return num_examples
+

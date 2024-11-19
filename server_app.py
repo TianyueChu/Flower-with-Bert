@@ -1,18 +1,13 @@
 """quickstart-compose: A Flower / PyTorch app."""
 import flwr as fl
-import logging
-# Set logging level to DEBUG
-# logging.basicConfig(level=logging.DEBUG)
+
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
-from flwr.server.strategy import FedAvg
+
 from torch.backends.opt_einsum import strategy
 
 # from quickstart_compose.task import FedCustom, weighted_average
 from task import FedCustom, weighted_average
-
-# Configure logging
-# logging.basicConfig(filename="server.log", level=logging.DEBUG, format="%(asctime)s %(levelname)s: %(message)s")
 
 
 def server_fn(context: Context) -> ServerAppComponents:
@@ -33,10 +28,10 @@ def server_fn(context: Context) -> ServerAppComponents:
 # Create FedAvg strategy
 strategy = FedCustom(
     fraction_fit=1.0,  # Sample 100% of available clients for training
-    fraction_evaluate=5,  # Sample 100% of available clients for evaluation
-    min_fit_clients=5,  # Never sample less than 5 clients for training
-    min_evaluate_clients=5,  # Never sample less than 5 clients for evaluation
-    min_available_clients=5,  # Wait until all 5 clients are available
+    fraction_evaluate=1,  # Sample 100% of available clients for evaluation
+    min_fit_clients=1,  # Never sample less than 5 clients for training
+    min_evaluate_clients=1,  # Never sample less than 5 clients for evaluation
+    min_available_clients=1,  # Wait until all 5 clients are available
     evaluate_metrics_aggregation_fn=weighted_average,
     server_testset_csv_path="./data/server_testset.csv"
 )

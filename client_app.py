@@ -1,20 +1,19 @@
 """quickstart-compose: A Flower / PyTorch app."""
 import logging
-logging.basicConfig(level=logging.INFO)
 import time
 import hashlib
 import torch
-from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments, \
-    DataCollatorWithPadding, DistilBertForSequenceClassification, DistilBertTokenizer
+from transformers import DistilBertForSequenceClassification
 from collections import OrderedDict
 from pathlib import Path
+from datasets import load_from_disk
 
 import flwr
-from flwr.client import Client, ClientApp, NumPyClient
+from flwr.client import Client
 
-from flwr.client import ClientApp, NumPyClient
+from flwr.client import ClientApp
 from flwr.common import Context
-from task import load_data, test, train, partition,load_or_partition_client_data
+from task import  test, train, load_or_partition_client_data,dataset_loader
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 logging.debug(f"Using device: {DEVICE}")
@@ -34,15 +33,15 @@ if not proportions_file_path.exists():
     with open(proportions_file_path, 'w') as f:
         f.write(str(initial_proportions))
 
+
 class BertClient(flwr.client.NumPyClient):
-    def __init__(self, net, trainset, testset, num_examples, tokenizer):
-        logging.debug("BertClient initialized with model, trainset, testset, and tokenizer")
+    def __init__(self, net, trainset, testset, num_examples):
+        logging.debug("BertClient initialized with model, trainset, testset")
         self.net = net
         self.trainset = trainset
         self.testset = testset
         self.num_examples = num_examples
-        self.tokenizer = tokenizer
-        logging.debug("BertClient initialized with model, trainset, testset, and tokenizer")
+
 
     def get_parameters(self, config):
         # Get model parameters as a list of numpy arrays
@@ -62,10 +61,9 @@ class BertClient(flwr.client.NumPyClient):
         logging.debug("Entering fit function")
         self.set_parameters(parameters)
         logging.debug("Parameters set, starting training")
-        trainer = train(
+        train(
             model=self.net,
             train_dataset=self.trainset,
-            tokenizer=self.tokenizer,
             epochs=1
         )
         logging.debug("Training completed")
@@ -76,7 +74,7 @@ class BertClient(flwr.client.NumPyClient):
         logging.debug("Entering evaluate function")
         self.set_parameters(parameters)
         logging.debug("Parameters set, starting evaluation")
-        eval_results = test(self.net, self.testset, self.tokenizer)
+        eval_results = test(self.net, self.testset)
         logging.debug(f"Evaluation completed with results: {eval_results}")
         return float(eval_results['eval_loss']), self.num_examples["testset"], {
             "accuracy": float(eval_results['eval_accuracy'])}
@@ -103,18 +101,24 @@ def client_fn(context: Context) -> Client:
 
     # Load data
     logging.debug("Loading data for client")
-    trainset, testset, num_examples, tokenizer = load_data(client_id)
+    num_examples = dataset_loader(client_id)
+
+    train_path = f"data/train_data/client_dataset_{client_id}"
+    test_path = f"data/test_data/client_dataset_{client_id}"
+
+    # Load datasets
+    trainset = load_from_disk(train_path)
+    testset= load_from_disk(test_path)
     logging.debug("Data loaded successfully")
 
     # Create and return a Flower client
     logging.debug("Creating BertClient instance")
-    return BertClient(net, trainset, testset, num_examples, tokenizer).to_client()
+    return BertClient(net, trainset, testset, num_examples).to_client()
 
 
 # Create the ClientApp
 logging.debug("Starting ClientApp")
 app = ClientApp(client_fn=client_fn)
 logging.debug("ClientApp created successfully")
-
 
 flwr.client.start_client(server_address="127.0.0.1:8080", client_fn=client_fn, grpc_max_message_length=1_073_741_824)
