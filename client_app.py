@@ -67,6 +67,7 @@ class BertClient(flwr.client.NumPyClient):
             epochs=1
         )
         logging.debug("Training completed")
+        self.evaluate(self.get_parameters(config={}), config)
         return self.get_parameters(config={}), self.num_examples["trainset"], {}
 
     def evaluate(self, parameters, config):
