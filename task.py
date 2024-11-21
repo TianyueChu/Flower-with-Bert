@@ -477,7 +477,11 @@ def load_or_partition_client_data(client_id, label_proportions_file_path,label_c
     print(f"Assigning label proportion {current_proportion} to client ID {client_id}")
 
     # Load the main dataset
-    df = pd.read_csv(dataset_path)
+    try:
+        df = pd.read_csv(dataset_path, on_bad_lines='skip')
+    except pd.errors.ParserError as e:
+        print(f"Error reading CSV: {e}")
+
 
     # Separate data by labels
     label_0_data = df[df[label_column] == 0]
