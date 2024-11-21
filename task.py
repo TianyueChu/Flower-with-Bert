@@ -478,7 +478,7 @@ def load_or_partition_client_data(client_id, label_proportions_file_path,label_c
 
     # Load the main dataset
     try:
-        df = pd.read_csv(dataset_path, on_bad_lines='skip')
+        df = pd.read_csv(dataset_path, on_bad_lines='skip', engine='python')
     except pd.errors.ParserError as e:
         print(f"Error reading CSV: {e}")
 
