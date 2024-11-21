@@ -1,4 +1,4 @@
-#  Federated Learning Project with Flower
+#  Federated Learning Project with Flower 
 
 ## Overview
 This project demonstrates a federated learning setup using Flower and PyTorch. The goal is to train a model in a federated setting with a client-server architecture. The dataset used includes a client dataset and a server test set. Before running the experiments, ensure the data and environment are properly configured as described below.

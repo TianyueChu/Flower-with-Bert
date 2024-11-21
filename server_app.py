@@ -28,10 +28,10 @@ def server_fn(context: Context) -> ServerAppComponents:
 # Create FedAvg strategy
 strategy = FedCustom(
     fraction_fit=1.0,  # Sample 100% of available clients for training
-    fraction_evaluate=1,  # Sample 100% of available clients for evaluation
-    min_fit_clients=1,  # Never sample less than 5 clients for training
-    min_evaluate_clients=1,  # Never sample less than 5 clients for evaluation
-    min_available_clients=1,  # Wait until all 5 clients are available
+    fraction_evaluate=5,  # Sample 100% of available clients for evaluation
+    min_fit_clients=5,  # Never sample less than 5 clients for training
+    min_evaluate_clients=5,  # Never sample less than 5 clients for evaluation
+    min_available_clients=5,  # Wait until all 5 clients are available
     evaluate_metrics_aggregation_fn=weighted_average,
     server_testset_csv_path="./data/server_testset.csv"
 )
