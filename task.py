@@ -581,7 +581,7 @@ def load_parameters_to_bert(parameters_aggregated):
     state_dict = {}
     for (name, param), ndarray in zip(model.named_parameters(), ndarrays):
         state_dict[name] = torch.tensor(ndarray, dtype=param.dtype)
-        print(f"Loaded parameter for layer: {name}")
+        # print(f"Loaded parameter for layer: {name}")
 
     # Load updated parameters into BERT model
     model.load_state_dict(state_dict,strict=True)
